@@ -63,7 +63,7 @@ class GoogleConfig(Base):
 
     client_id: str = ""
     client_secret: str = ""
-    redirect_uri: str = "http://localhost:8080"
+    redirect_uri: str = "urn:ietf:wg:oauth:2.0:oob"
     token_path: str = "token.json"
 
 

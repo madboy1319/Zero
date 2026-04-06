@@ -92,20 +92,18 @@ class GoogleAuthManager:
         print(f"\nAuthorization URL:\n{auth_url}\n")
         print("="*60 + "\n")
 
-        # Run the local server in a separate thread to avoid blocking the async loop
+        # Run the manual code entry flow for OOB redirects
         try:
-            # We use port 8080 as requested in redirect_uri
-            # flow.run_local_server is blocking, so we use to_thread
-            creds = await asyncio.to_thread(
-                flow.run_local_server, 
-                port=8080, 
-                prompt="consent",
-                authorization_prompt_message="Visit this URL to authorize: {url}"
-            )
+            print("\n" + "="*60)
+            print("PASTE THE CODE FROM YOUR BROWSER BELOW")
+            print("="*60)
+            
+            code = await asyncio.to_thread(input, "Paste the code shown in your browser: ")
+            await asyncio.to_thread(flow.fetch_token, code=code)
+            creds = flow.credentials
         except Exception as e:
             logger.error(f"OAuth flow failed: {e}")
-            # Fallback to console flow if supported by the library version
-            creds = await asyncio.to_thread(flow.run_console)
+            raise
         
         if self._notify_callback:
             await self._notify_callback(

@@ -977,6 +977,45 @@ zero agent -c ~/.zero-telegram/config.json -w /tmp/zero-telegram-test -m "Hello!
 </details>
 
 <details>
+<summary><b>Google Calendar & Tasks (OAuth)</b></summary>
+
+To use Google Calendar and Tasks skills, you need to set up a Google Cloud Project and configure OAuth.
+
+**1. Create a Google Cloud Project:**
+- Go to the [Google Cloud Console](https://console.cloud.google.com/).
+- Create a new project and enable the **Google Calendar API** and **Google Tasks API**.
+
+**2. Configure OAuth Consent Screen:**
+- Go to **APIs & Services > OAuth consent screen**.
+- Choose **External** and complete the required information.
+- Add the `.../auth/calendar.events` and `.../auth/tasks` scopes.
+
+**3. Create OAuth 2.0 Credentials:**
+- Go to **APIs & Services > Credentials**.
+- Click **Create Credentials > OAuth client ID** and select **Desktop app**.
+- **IMPORTANT**: For Termux and remote environments, set the redirect URI to `urn:ietf:wg:oauth:2.0:oob`.
+- Copy your **Client ID** and **Client Secret**.
+
+**4. Configure zero:**
+Add your credentials to `~/.zero/config.json`:
+```json
+{
+  "providers": {
+    "google": {
+      "client_id": "YOUR_CLIENT_ID",
+      "client_secret": "YOUR_CLIENT_SECRET",
+      "redirect_uri": "urn:ietf:wg:oauth:2.0:oob"
+    }
+  }
+}
+```
+
+**5. Authenticate:**
+The first time you use a Google tool, zero will provide an authorization URL. Open it in your browser, approve access, and paste the code back into the terminal.
+
+</details>
+
+<details>
 <summary><b>Custom Provider (Any OpenAI-compatible API)</b></summary>
 
 Connects directly to any OpenAI-compatible endpoint — LM Studio, llama.cpp, Together AI, Fireworks, Azure OpenAI, or any self-hosted server. Model name is passed as-is.
