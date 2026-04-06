@@ -1,15 +1,15 @@
 # Channel Plugin Guide
 
-Build a custom nanobot channel in three steps: subclass, package, install.
+Build a custom zero channel in three steps: subclass, package, install.
 
-> **Note:** We recommend developing channel plugins against a source checkout of nanobot (`pip install -e .`) rather than a PyPI release, so you always have access to the latest base-channel features and APIs.
+> **Note:** We recommend developing channel plugins against a source checkout of zero (`pip install -e .`) rather than a PyPI release, so you always have access to the latest base-channel features and APIs.
 
 ## How It Works
 
-nanobot discovers channel plugins via Python [entry points](https://packaging.python.org/en/latest/specifications/entry-points/). When `nanobot gateway` starts, it scans:
+zero discovers channel plugins via Python [entry points](https://packaging.python.org/en/latest/specifications/entry-points/). When `zero gateway` starts, it scans:
 
-1. Built-in channels in `nanobot/channels/`
-2. External packages registered under the `nanobot.channels` entry point group
+1. Built-in channels in `zero/channels/`
+2. External packages registered under the `zero.channels` entry point group
 
 If a matching config section has `"enabled": true`, the channel is instantiated and started.
 
@@ -20,8 +20,8 @@ We'll build a minimal webhook channel that receives messages via HTTP POST and s
 ### Project Structure
 
 ```
-nanobot-channel-webhook/
-├── nanobot_channel_webhook/
+zero-channel-webhook/
+├── zero_channel_webhook/
 │   ├── __init__.py          # re-export WebhookChannel
 │   └── channel.py           # channel implementation
 └── pyproject.toml
@@ -30,22 +30,22 @@ nanobot-channel-webhook/
 ### 1. Create Your Channel
 
 ```python
-# nanobot_channel_webhook/__init__.py
-from nanobot_channel_webhook.channel import WebhookChannel
+# zero_channel_webhook/__init__.py
+from zero_channel_webhook.channel import WebhookChannel
 
 __all__ = ["WebhookChannel"]
 ```
 
 ```python
-# nanobot_channel_webhook/channel.py
+# zero_channel_webhook/channel.py
 import asyncio
 from typing import Any
 
 from aiohttp import web
 from loguru import logger
 
-from nanobot.channels.base import BaseChannel
-from nanobot.bus.events import OutboundMessage
+from zero.channels.base import BaseChannel
+from zero.bus.events import OutboundMessage
 
 
 class WebhookChannel(BaseChannel):
@@ -118,12 +118,12 @@ class WebhookChannel(BaseChannel):
 ```toml
 # pyproject.toml
 [project]
-name = "nanobot-channel-webhook"
+name = "zero-channel-webhook"
 version = "0.1.0"
-dependencies = ["nanobot", "aiohttp"]
+dependencies = ["zero", "aiohttp"]
 
-[project.entry-points."nanobot.channels"]
-webhook = "nanobot_channel_webhook:WebhookChannel"
+[project.entry-points."zero.channels"]
+webhook = "zero_channel_webhook:WebhookChannel"
 
 [build-system]
 requires = ["setuptools"]
@@ -136,11 +136,11 @@ The key (`webhook`) becomes the config section name. The value points to your `B
 
 ```bash
 pip install -e .
-nanobot plugins list      # verify "Webhook" shows as "plugin"
-nanobot onboard           # auto-adds default config for detected plugins
+zero plugins list      # verify "Webhook" shows as "plugin"
+zero onboard           # auto-adds default config for detected plugins
 ```
 
-Edit `~/.nanobot/config.json`:
+Edit `~/.zero/config.json`:
 
 ```json
 {
@@ -157,7 +157,7 @@ Edit `~/.nanobot/config.json`:
 ### 4. Run & Test
 
 ```bash
-nanobot gateway
+zero gateway
 ```
 
 In another terminal:
@@ -205,8 +205,8 @@ Channels that don't need interactive login (e.g. Telegram with bot token, Discor
 
 Users trigger interactive login via:
 ```bash
-nanobot channels login <channel_name>
-nanobot channels login <channel_name> --force  # re-authenticate
+zero channels login <channel_name>
+zero channels login <channel_name> --force  # re-authenticate
 ```
 
 ### Provided by Base
@@ -215,7 +215,7 @@ nanobot channels login <channel_name> --force  # re-authenticate
 |-------------------|-------------|
 | `_handle_message(sender_id, chat_id, content, media?, metadata?, session_key?)` | **Call this when you receive a message.** Checks `is_allowed()`, then publishes to the bus. Automatically sets `_wants_stream` if `supports_streaming` is true. |
 | `is_allowed(sender_id)` | Checks against `config["allowFrom"]`; `"*"` allows all, `[]` denies all. |
-| `default_config()` (classmethod) | Returns default config dict for `nanobot onboard`. Override to declare your fields. |
+| `default_config()` (classmethod) | Returns default config dict for `zero onboard`. Override to declare your fields. |
 | `transcribe_audio(file_path)` | Transcribes audio via Groq Whisper (if configured). |
 | `supports_streaming` (property) | `True` when config has `"streaming": true` **and** subclass overrides `send_delta()`. |
 | `is_running` | Returns `self._running`. |
@@ -343,7 +343,7 @@ async def start(self) -> None:
 
 `allowFrom` is handled automatically by `_handle_message()` — you don't need to check it yourself.
 
-Override `default_config()` so `nanobot onboard` auto-populates `config.json`:
+Override `default_config()` so `zero onboard` auto-populates `config.json`:
 
 ```python
 @classmethod
@@ -357,25 +357,25 @@ If not overridden, the base class returns `{"enabled": false}`.
 
 | What | Format | Example |
 |------|--------|---------|
-| PyPI package | `nanobot-channel-{name}` | `nanobot-channel-webhook` |
+| PyPI package | `zero-channel-{name}` | `zero-channel-webhook` |
 | Entry point key | `{name}` | `webhook` |
 | Config section | `channels.{name}` | `channels.webhook` |
-| Python package | `nanobot_channel_{name}` | `nanobot_channel_webhook` |
+| Python package | `zero_channel_{name}` | `zero_channel_webhook` |
 
 ## Local Development
 
 ```bash
-git clone https://github.com/you/nanobot-channel-webhook
-cd nanobot-channel-webhook
+git clone https://github.com/you/zero-channel-webhook
+cd zero-channel-webhook
 pip install -e .
-nanobot plugins list    # should show "Webhook" as "plugin"
-nanobot gateway         # test end-to-end
+zero plugins list    # should show "Webhook" as "plugin"
+zero gateway         # test end-to-end
 ```
 
 ## Verify
 
 ```bash
-$ nanobot plugins list
+$ zero plugins list
 
   Name       Source    Enabled
   telegram   builtin  yes

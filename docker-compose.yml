@@ -3,7 +3,7 @@ x-common-config: &common-config
     context: .
     dockerfile: Dockerfile
   volumes:
-    - ~/.nanobot:/home/nanobot/.nanobot
+    - ~/.zero:/home/zero/.zero
   cap_drop:
     - ALL
   cap_add:
@@ -13,8 +13,8 @@ x-common-config: &common-config
     - seccomp=unconfined
 
 services:
-  nanobot-gateway:
-    container_name: nanobot-gateway
+  zero-gateway:
+    container_name: zero-gateway
     <<: *common-config
     command: ["gateway"]
     restart: unless-stopped
@@ -29,7 +29,7 @@ services:
           cpus: '0.25'
           memory: 256M
   
-  nanobot-cli:
+  zero-cli:
     <<: *common-config
     profiles:
       - cli

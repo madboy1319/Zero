@@ -24,3 +24,7 @@ botpy.log
 nano.*.save
 .DS_Store
 uv.lock
+token.json
+
+config.py
+user_profile.json
