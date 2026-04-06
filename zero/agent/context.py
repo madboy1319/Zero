@@ -46,11 +46,11 @@ class ContextBuilder:
             # Inject onboarding or update rules
             name = user_profile.get("name", "there")
             if not user_profile.get("onboarding_complete", False):
-                parts.append(render_template("agent/onboarding.md", name=name))
+                parts.append(render_template("agent/onboarding.md", user_name=name))
             else:
                 # Part 4: Natural updates instructions are also in onboarding.md
                 # We can include them even when onboarding is complete so Zero knows how to handle updates.
-                parts.append(render_template("agent/onboarding.md", name=name))
+                parts.append(render_template("agent/onboarding.md", user_name=name))
 
         bootstrap = self._load_bootstrap_files()
         if bootstrap:
