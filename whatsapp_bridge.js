@@ -11,14 +11,14 @@ async function startBridge() {
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
     
     const sock = makeWASocket({
-        auth: state,
-        printQRInTerminal: true
+        auth: state
     });
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
         if (qr) {
+            console.log('\n\nScan this QR code with WhatsApp:\n');
             qrcode.generate(qr, { small: true });
         }
         if (connection === 'close') {
@@ -30,7 +30,7 @@ async function startBridge() {
             }
         }
         if (connection === 'open') {
-            console.log('WhatsApp connected!');
+            console.log('✅ WhatsApp connected!');
         }
     });
 
