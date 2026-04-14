@@ -20,7 +20,7 @@ pip install openai groq requests aiohttp
 echo ""
 
 # ── Node.js dependencies ──────────────────────────────────────────────────────
-echo "▶ Installing Node.js dependencies..."
+echo "▶ Installing Node.js dependencies (Baileys, no Puppeteer)..."
 npm install
 
 echo ""

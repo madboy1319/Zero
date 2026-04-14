@@ -1,92 +1,103 @@
 /**
- * whatsapp_bridge.js
- * Zero WhatsApp Bridge using whatsapp-web.js
+ * whatsapp_bridge.js — Zero WhatsApp Bridge (Baileys edition)
+ *
+ * Uses @whiskeysockets/baileys — no Puppeteer, works on Android/Termux.
  *
  * Features:
  *  - QR code in terminal on first run
- *  - Session saved to .ww_session/ (no re-scan after first time)
- *  - Incoming WhatsApp messages → Zero API (http://localhost:18790/v1/chat/completions)
- *  - Zero replies → back to WhatsApp sender
+ *  - Auth state saved to .baileys_session/ (no re-scan after first time)
+ *  - Incoming WhatsApp messages → Zero API (/v1/chat/completions)
+ *  - Zero reply → back to WhatsApp sender
  *  - Voice notes downloaded and referenced in message context
- *  - Per-user conversation history maintained in memory
+ *  - Auto-reconnect on disconnect
+ *  - Per-user conversation history (last 20 messages)
  */
 
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
-const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
+import makeWASocket, {
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
+  downloadMediaMessage,
+  DisconnectReason,
+} from '@whiskeysockets/baileys';
+import { Boom } from '@hapi/boom';
+import qrcode from 'qrcode-terminal';
+import pino from 'pino';
+import axios from 'axios';
+import { writeFile, mkdir } from 'fs/promises';
+import { join } from 'path';
+import { homedir } from 'os';
+import { randomBytes } from 'crypto';
 
 // ── Configuration ─────────────────────────────────────────────────────────────
-const ZERO_API_URL = process.env.ZERO_API_URL || 'http://localhost:18790/v1/chat/completions';
-const ZERO_MODEL   = process.env.ZERO_MODEL   || 'openrouter/auto';
-const SESSION_DIR  = path.join(__dirname, '.ww_session');
-const MEDIA_DIR    = path.join(os.homedir(), '.zero', 'whatsapp_media');
-const MAX_HISTORY  = 20;   // messages per user kept in memory
+const ZERO_API_URL  = process.env.ZERO_API_URL  || 'http://localhost:18790/v1/chat/completions';
+const ZERO_MODEL    = process.env.ZERO_MODEL    || 'openrouter/auto';
+const SESSION_DIR   = join(process.cwd(), '.baileys_session');
+const MEDIA_DIR     = join(homedir(), '.zero', 'whatsapp_media');
+const MAX_HISTORY   = 20;
 
 // ── In-memory conversation histories ─────────────────────────────────────────
-// Map<chatId, Array<{role, content}>>
-const histories = new Map();
+const histories = new Map();   // Map<jid, {role, content}[]>
 
-function getHistory(chatId) {
-  if (!histories.has(chatId)) histories.set(chatId, []);
-  return histories.get(chatId);
+function getHistory(jid) {
+  if (!histories.has(jid)) histories.set(jid, []);
+  return histories.get(jid);
 }
 
-function pushHistory(chatId, role, content) {
-  const h = getHistory(chatId);
+function pushHistory(jid, role, content) {
+  const h = getHistory(jid);
   h.push({ role, content });
-  // Keep only the last MAX_HISTORY turns
   if (h.length > MAX_HISTORY) h.splice(0, h.length - MAX_HISTORY);
 }
 
 // ── Zero API call ─────────────────────────────────────────────────────────────
-async function askZero(chatId, userMessage) {
-  const history = getHistory(chatId);
+async function askZero(jid, userText) {
   const messages = [
-    ...history,
-    { role: 'user', content: userMessage },
+    ...getHistory(jid),
+    { role: 'user', content: userText },
   ];
 
   try {
-    const response = await axios.post(
+    const res = await axios.post(
       ZERO_API_URL,
-      {
-        model: ZERO_MODEL,
-        messages,
-        stream: false,
-      },
-      {
-        timeout: 120_000,
-        headers: { 'Content-Type': 'application/json' },
-      }
+      { model: ZERO_MODEL, messages, stream: false },
+      { timeout: 120_000, headers: { 'Content-Type': 'application/json' } }
     );
-
-    const reply = response.data?.choices?.[0]?.message?.content || '(no response)';
-    // Record both sides for context
-    pushHistory(chatId, 'user',      userMessage);
-    pushHistory(chatId, 'assistant', reply);
+    const reply = res.data?.choices?.[0]?.message?.content || '(no response)';
+    pushHistory(jid, 'user',      userText);
+    pushHistory(jid, 'assistant', reply);
     return reply;
   } catch (err) {
     const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
-    console.error(`[Zero API error] ${detail}`);
+    console.error(`[Zero API] Error: ${detail}`);
     return `⚠️ Zero is not responding right now. (${err.message})`;
   }
 }
 
-// ── Download voice note ───────────────────────────────────────────────────────
-async function downloadVoiceNote(msg) {
-  try {
-    fs.mkdirSync(MEDIA_DIR, { recursive: true });
-    const media = await msg.downloadMedia();
-    if (!media) return null;
+// ── Text extractor ────────────────────────────────────────────────────────────
+function extractText(msg) {
+  const m = msg.message;
+  if (!m) return null;
+  return (
+    m.conversation                             ||
+    m.extendedTextMessage?.text                ||
+    m.imageMessage?.caption                    ||
+    m.videoMessage?.caption                    ||
+    m.documentMessage?.caption                 ||
+    null
+  );
+}
 
-    const ext  = media.mimetype.split('/')[1]?.split(';')[0] || 'ogg';
-    const name = `voice_${Date.now()}.${ext}`;
-    const dest = path.join(MEDIA_DIR, name);
-    fs.writeFileSync(dest, Buffer.from(media.data, 'base64'));
-    console.log(`[Voice] Saved to ${dest}`);
+// ── Voice note downloader ─────────────────────────────────────────────────────
+async function downloadVoice(sock, msg) {
+  try {
+    await mkdir(MEDIA_DIR, { recursive: true });
+    const buf  = await downloadMediaMessage(msg, 'buffer', {}, { reuploadRequest: sock.updateMediaMessage });
+    const ext  = 'ogg';
+    const name = `voice_${Date.now()}_${randomBytes(4).toString('hex')}.${ext}`;
+    const dest = join(MEDIA_DIR, name);
+    await writeFile(dest, buf);
+    console.log(`[Voice] Saved → ${dest}`);
     return dest;
   } catch (err) {
     console.error(`[Voice] Download failed: ${err.message}`);
@@ -94,115 +105,126 @@ async function downloadVoiceNote(msg) {
   }
 }
 
-// ── WhatsApp Client ───────────────────────────────────────────────────────────
-const client = new Client({
-  authStrategy: new LocalAuth({ dataPath: SESSION_DIR }),
-  puppeteer: {
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-    ],
-  },
-  webVersionCache: {
-    type: 'remote',
-    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1017054896-alpha/index.html',
-  },
-});
+// ── Bridge ────────────────────────────────────────────────────────────────────
+async function startBridge() {
+  console.log('');
+  console.log('╔══════════════════════════════════════╗');
+  console.log('║   Zero — WhatsApp Bridge (Baileys)   ║');
+  console.log('╚══════════════════════════════════════╝');
+  console.log(`  API  : ${ZERO_API_URL}`);
+  console.log(`  Auth : ${SESSION_DIR}`);
+  console.log('');
 
-// QR code — displayed only once (subsequent starts reuse saved session)
-client.on('qr', (qr) => {
-  console.log('\n📱 Scan this QR code with WhatsApp:');
-  console.log('   Open WhatsApp → Settings → Linked Devices → Link a Device\n');
-  qrcode.generate(qr, { small: true });
-  console.log('\nWaiting for scan...\n');
-});
+  const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+  const { version }          = await fetchLatestBaileysVersion();
+  const logger               = pino({ level: 'silent' });
 
-client.on('authenticated', () => {
-  console.log('✅ WhatsApp authenticated — session saved to .ww_session/');
-});
+  console.log(`  Baileys version: ${version.join('.')}`);
 
-client.on('auth_failure', (msg) => {
-  console.error(`❌ Auth failed: ${msg}`);
-  console.error('Delete .ww_session/ and restart to re-scan the QR code.');
+  const sock = makeWASocket({
+    version,
+    logger,
+    auth: {
+      creds: state.creds,
+      keys: makeCacheableSignalKeyStore(state.keys, logger),
+    },
+    printQRInTerminal: false,       // we print ourselves
+    browser: ['Zero', 'cli', '1.0.0'],
+    syncFullHistory: false,
+    markOnlineOnConnect: false,
+  });
+
+  // Suppress WebSocket-level noise
+  if (sock.ws?.on) {
+    sock.ws.on('error', (err) => console.error('[WS]', err.message));
+  }
+
+  // ── Connection updates ──────────────────────────────────────────────────
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
+      console.log('\n📱 Scan this QR code with WhatsApp:');
+      console.log('   Settings → Linked Devices → Link a Device\n');
+      qrcode.generate(qr, { small: true });
+      console.log('\nWaiting for scan...\n');
+    }
+
+    if (connection === 'open') {
+      const name = sock.user?.name || 'Unknown';
+      const num  = sock.user?.id?.split(':')[0] || 'Unknown';
+      console.log(`\n🟢 Connected as ${name} (+${num})\n`);
+    }
+
+    if (connection === 'close') {
+      const code = (lastDisconnect?.error instanceof Boom)
+        ? lastDisconnect.error.output.statusCode
+        : undefined;
+      const loggedOut = code === DisconnectReason.loggedOut;
+
+      console.log(`🔴 Disconnected (status ${code ?? 'unknown'})`);
+
+      if (loggedOut) {
+        console.log('   Logged out — delete .baileys_session/ and restart to re-scan QR.');
+      } else {
+        console.log('   Reconnecting in 5 s...');
+        setTimeout(startBridge, 5000);
+      }
+    }
+  });
+
+  // ── Persist credentials ─────────────────────────────────────────────────
+  sock.ev.on('creds.update', saveCreds);
+
+  // ── Incoming messages ───────────────────────────────────────────────────
+  sock.ev.on('messages.upsert', async ({ messages: msgs, type }) => {
+    if (type !== 'notify') return;
+
+    for (const msg of msgs) {
+      if (msg.key.fromMe) continue;
+      if (msg.key.remoteJid === 'status@broadcast') continue;
+
+      const jid = msg.key.remoteJid;   // full JID — used for replies
+      let userText = extractText(msg) || '';
+      const isVoice = !!(msg.message?.audioMessage?.pttSeconds);
+
+      // ── Voice note ────────────────────────────────────────────────────
+      if (isVoice || msg.message?.audioMessage) {
+        console.log(`[Voice] Received from ${jid}`);
+        const voicePath = await downloadVoice(sock, msg);
+        userText = voicePath
+          ? `[Voice Note — audio saved at: ${voicePath}]. Please acknowledge receipt.`
+          : '[Voice Note received — could not download audio]';
+      }
+
+      // ── Other media (image/video/doc) with no caption ─────────────────
+      if (!userText) {
+        const m = msg.message || {};
+        if      (m.imageMessage)    userText = '[Image received]';
+        else if (m.videoMessage)    userText = '[Video received]';
+        else if (m.documentMessage) userText = '[Document received]';
+        else                        continue;  // skip truly empty messages
+      }
+
+      const ts   = new Date().toLocaleTimeString();
+      const from = jid.split('@')[0];
+      console.log(`[${ts}] ${from}: ${userText.slice(0, 80)}${userText.length > 80 ? '…' : ''}`);
+
+      // ── Ask Zero ──────────────────────────────────────────────────────
+      const reply = await askZero(jid, userText);
+      await sock.sendMessage(jid, { text: reply });
+      console.log(`[${ts}] Zero → ${from}: ${reply.slice(0, 80)}${reply.length > 80 ? '…' : ''}`);
+    }
+  });
+
+  return sock;
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+startBridge().catch((err) => {
+  console.error('Fatal error:', err);
   process.exit(1);
 });
 
-client.on('ready', () => {
-  const name = client.info?.pushname || 'Unknown';
-  const num  = client.info?.wid?.user || 'Unknown';
-  console.log(`\n🟢 WhatsApp connected as ${name} (+${num})`);
-  console.log(`   Forwarding messages → ${ZERO_API_URL}\n`);
-});
-
-client.on('disconnected', (reason) => {
-  console.warn(`⚠️  Disconnected: ${reason}`);
-  console.warn('Attempting to reconnect...');
-  client.initialize();
-});
-
-// ── Incoming message handler ──────────────────────────────────────────────────
-client.on('message', async (msg) => {
-  // Ignore status broadcasts and our own messages
-  if (msg.from === 'status@broadcast') return;
-  if (msg.fromMe) return;
-
-  const chatId  = msg.from;   // e.g. "15551234567@c.us"
-  const contact = await msg.getContact();
-  const name    = contact.pushname || contact.name || chatId;
-
-  let userText = msg.body || '';
-
-  // ── Handle voice notes ──────────────────────────────────────────────────
-  if (msg.hasMedia && msg.type === 'ptt') {
-    console.log(`[Voice note] from ${name} (${chatId})`);
-    const voicePath = await downloadVoiceNote(msg);
-    if (voicePath) {
-      userText = `[Voice Note received — audio saved at: ${voicePath}]\n` +
-                 `Please acknowledge you received a voice note and let me know if you can process it.`;
-    } else {
-      userText = '[Voice Note received — could not download audio]';
-    }
-  }
-
-  // ── Handle other media (images, docs) ──────────────────────────────────
-  if (msg.hasMedia && msg.type !== 'ptt') {
-    const caption = msg.body ? ` Caption: "${msg.body}"` : '';
-    userText = `[${msg.type.toUpperCase()} received${caption}]`;
-  }
-
-  if (!userText.trim()) return;
-
-  console.log(`[${new Date().toLocaleTimeString()}] ${name}: ${userText.slice(0, 80)}${userText.length > 80 ? '…' : ''}`);
-
-  // Show typing indicator
-  const chat = await msg.getChat();
-  await chat.sendStateTyping();
-
-  // Get Zero's reply
-  const reply = await askZero(chatId, userText);
-
-  // Stop typing indicator and send reply
-  await chat.clearState();
-  await msg.reply(reply);
-
-  console.log(`[${new Date().toLocaleTimeString()}] Zero → ${name}: ${reply.slice(0, 80)}${reply.length > 80 ? '…' : ''}`);
-});
-
-// ── Startup ───────────────────────────────────────────────────────────────────
-console.log('');
-console.log('╔══════════════════════════════════════╗');
-console.log('║   Zero — WhatsApp Bridge             ║');
-console.log('╚══════════════════════════════════════╝');
-console.log(`  API endpoint : ${ZERO_API_URL}`);
-console.log(`  Session dir  : ${SESSION_DIR}`);
-console.log(`  Media dir    : ${MEDIA_DIR}`);
-console.log('');
-
-client.initialize();
-
-// Graceful shutdown
-process.on('SIGINT',  async () => { await client.destroy(); process.exit(0); });
-process.on('SIGTERM', async () => { await client.destroy(); process.exit(0); });
+process.on('SIGINT',  () => { console.log('\nShutting down.'); process.exit(0); });
+process.on('SIGTERM', () => { process.exit(0); });

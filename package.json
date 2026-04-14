@@ -1,13 +1,16 @@
 {
   "name": "zero-whatsapp-bridge",
-  "version": "1.0.0",
-  "description": "whatsapp-web.js bridge for Zero AI assistant",
+  "version": "2.0.0",
+  "description": "Baileys WhatsApp bridge for Zero AI assistant (Termux-compatible, no Puppeteer)",
+  "type": "module",
   "main": "whatsapp_bridge.js",
   "scripts": {
     "start": "node whatsapp_bridge.js"
   },
   "dependencies": {
-    "whatsapp-web.js": "^1.26.0",
+    "@whiskeysockets/baileys": "^7.0.0",
+    "@hapi/boom": "^10.0.1",
+    "pino": "^9.0.0",
     "qrcode-terminal": "^0.12.0",
     "axios": "^1.7.2"
   },
