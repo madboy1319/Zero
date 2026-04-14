@@ -852,7 +852,52 @@ zero gateway
 
 Simply send the command above to your zero (via CLI or any chat channel), and it will handle the rest.
 
+## 📱 Termux Auto-Start on Phone Boot
+
+Run Zero automatically every time your Android phone boots using **Termux:Boot**.
+
+### 1. Install Termux:Boot
+
+Download from [F-Droid](https://f-droid.org/packages/com.termux.boot/) (not Google Play — the Play version is outdated).
+
+> [!IMPORTANT]
+> After installing Termux:Boot, **open it once** so it registers with Android's boot receiver. Then you can close it.
+
+### 2. Create the boot script
+
+In Termux, run:
+
+```bash
+mkdir -p ~/.termux/boot
+cp ~/Zero/termux-boot/start-zero.sh ~/.termux/boot/start-zero.sh
+chmod +x ~/.termux/boot/start-zero.sh
+```
+
+Or create it manually:
+
+```bash
+mkdir -p ~/.termux/boot
+cat > ~/.termux/boot/start-zero.sh << 'EOF'
+#!/data/data/com.termux/files/usr/bin/bash
+cd ~/Zero
+python -m zero gateway
+EOF
+chmod +x ~/.termux/boot/start-zero.sh
+```
+
+### 3. Enable battery optimization exemption
+
+Go to **Android Settings → Apps → Termux → Battery** and set it to **Unrestricted** (or "Don't optimize"). This prevents Android from killing Zero in the background.
+
+### 4. Reboot to test
+
+Restart your phone — Zero should start automatically and connect to Telegram.
+
+> [!TIP]
+> To check if Zero started after boot, look for the Termux notification or send a message to your bot.
+
 ## ⚙️ Configuration
+
 
 Config file: `~/.zero/config.json`
 

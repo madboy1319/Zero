@@ -17,7 +17,8 @@ DEFAULT_PROFILE = {
     "current_mood": "neutral",
     "frequently_discussed": [],
     "personal_notes": [],
-    "onboarding_complete": False
+    "onboarding_complete": False,
+    "morning_briefing_time": "",  # e.g. "07:00" — set by user, drives morning cron job
 }
 
 class UserProfileManager:

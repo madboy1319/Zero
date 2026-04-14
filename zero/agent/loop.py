@@ -27,6 +27,8 @@ from zero.agent.tools.search import GlobTool, GrepTool
 from zero.agent.tools.shell import ExecTool
 from zero.agent.tools.spawn import SpawnTool
 from zero.agent.tools.web import WebFetchTool, WebSearchTool
+from zero.agent.tools.reminders import ReminderSetTool, ReminderListTool
+from zero.agent.tools.notes import NoteSaveTool, NoteListTool, NoteDeleteTool
 
 from zero.bus.events import InboundMessage, OutboundMessage
 from zero.command import CommandContext, CommandRouter, register_builtin_commands
@@ -290,8 +292,70 @@ class AgentLoop:
             self.tools.register(
                 CronTool(self.cron_service, default_timezone=self.context.timezone or "UTC")
             )
-        
+        # Reminder and Notes tools — always available
+        self.tools.register(ReminderSetTool())
+        self.tools.register(ReminderListTool())
+        self.tools.register(NoteSaveTool())
+        self.tools.register(NoteListTool())
+        self.tools.register(NoteDeleteTool())
+        # Register system cron jobs (evening check-in + morning briefing)
+        if self.cron_service:
+            self._register_system_cron_jobs()
 
+
+    def _register_system_cron_jobs(self) -> None:
+        """Register always-on system cron jobs: evening check-in and morning briefing."""
+        from zero.cron.types import CronJob, CronPayload, CronSchedule
+
+        tz = self.context.timezone or "UTC"
+
+        # Evening check-in — 9 PM every day
+        evening_job = CronJob(
+            id="system_evening_checkin",
+            name="Evening Check-In",
+            enabled=True,
+            schedule=CronSchedule(kind="cron", expr="0 21 * * *", tz=tz),
+            payload=CronPayload(
+                kind="agent_turn",
+                message=(
+                    "It's evening! Ask the user in a warm, friendly way: "
+                    "'Hey! 🌙 What's on your plate tomorrow? Tell me everything and I'll make sure you don't miss anything.' "
+                    "When they reply, save their plan using note_save with tags=['tomorrow_plan']."
+                ),
+                deliver=True,
+            ),
+        )
+        self.cron_service.register_system_job(evening_job)
+
+        # Morning briefing — use user's configured time, default 07:00
+        profile = self.profile.load()
+        briefing_time = profile.get("morning_briefing_time") or "07:00"
+        try:
+            hour, minute = (int(x) for x in briefing_time.split(":"))
+        except Exception:
+            hour, minute = 7, 0
+        morning_expr = f"{minute} {hour} * * *"
+
+        morning_job = CronJob(
+            id="system_morning_briefing",
+            name="Morning Briefing",
+            enabled=True,
+            schedule=CronSchedule(kind="cron", expr=morning_expr, tz=tz),
+            payload=CronPayload(
+                kind="agent_turn",
+                message=(
+                    "Good morning! Deliver the morning briefing. "
+                    "Use reminder_list() to get today's reminders and note_list(query='tomorrow_plan') for the user's plan. "
+                    "Then send a warm, conversational summary — not a boring list. Start with a friendly greeting."
+                ),
+                deliver=True,
+            ),
+        )
+        self.cron_service.register_system_job(morning_job)
+        logger.info(
+            "System cron jobs registered: evening check-in (21:00 {}), morning briefing ({}:{}0 {})",
+            tz, hour, minute, tz,
+        )
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
