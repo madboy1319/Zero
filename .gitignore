@@ -30,3 +30,7 @@ config.py
 user_profile.json
 
 .env.local
+
+# WhatsApp bridge
+.ww_session/
+node_modules/

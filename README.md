@@ -854,55 +854,93 @@ Simply send the command above to your zero (via CLI or any chat channel), and it
 
 ## 💬 WhatsApp Setup
 
-Zero connects to WhatsApp using a local Node.js bridge (no third-party server — everything stays on your device).
+Zero includes a standalone WhatsApp bridge (`whatsapp_bridge.js`) built with **whatsapp-web.js**. It runs as a separate Node.js process that connects to Zero's local HTTP API.
 
 ### Requirements
 
-- **Node.js ≥ 20** — [nodejs.org](https://nodejs.org/) or `pkg install nodejs` in Termux
-- Zero installed and configured (`~/.zero/config.json`)
+- **Node.js ≥ 18** — [nodejs.org](https://nodejs.org/) or `pkg install nodejs` in Termux
+- **Python ≥ 3.11** with Zero installed and configured
+- Chromium/Puppeteer (`whatsapp-web.js` requires a headless browser)
+  - On Termux: `pkg install chromium`
+  - On Ubuntu/Debian: `apt install chromium-browser`
 
-### Step 1 — First-time login (scan QR)
-
-```bash
-python -m zero channels login whatsapp
-```
-
-This will:
-1. Install the bridge dependencies automatically (`npm install`)
-2. Build the bridge (`npm run build`)
-3. Display a **QR code in the terminal**
-4. You scan it with WhatsApp on your phone: **Settings → Linked Devices → Link a Device**
-5. Session is saved to `~/.zero/whatsapp-auth/` — **QR is only needed once**
-
-### Step 2 — Start Zero with WhatsApp
+### Quick Start
 
 ```bash
-python -m zero gateway
+# 1. Install all dependencies (Python + Node.js)
+bash setup.sh
+
+# 2. Start Zero + WhatsApp bridge together
+bash start.sh
 ```
 
-The WhatsApp bridge starts automatically in the background. Every message you send to your WhatsApp linked device is routed to Zero, and every reply is sent back via WhatsApp.
+On first run, a **QR code appears in the terminal**. Scan it with WhatsApp:
+> **WhatsApp → Settings → Linked Devices → Link a Device**
 
-### Configuration (`.env`)
+The session is saved to `.ww_session/` — **you only scan once** and it reconnects automatically on every restart.
 
-```env
-ZERO_CHANNELS__WHATSAPP__ENABLED=true
-ZERO_CHANNELS__WHATSAPP__BRIDGE_URL=ws://localhost:3001
+---
+
+### Manual startup (two terminals)
+
+**Terminal 1 — Zero API server:**
+```bash
+python -m zero serve --port 18790
 ```
 
-> [!TIP]
-> The bridge runs on port `3001` by default. If you need a different port, set `BRIDGE_PORT=3002` in your environment and update `BRIDGE_URL` accordingly.
+**Terminal 2 — WhatsApp bridge:**
+```bash
+node whatsapp_bridge.js
+```
+
+---
+
+### Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ZERO_API_URL` | `http://localhost:18790/v1/chat/completions` | Zero API endpoint |
+| `ZERO_MODEL` | `openrouter/auto` | LLM model to use |
+
+Set them before running:
+```bash
+ZERO_API_URL=http://localhost:18790/v1/chat/completions \
+ZERO_MODEL=openrouter/auto \
+node whatsapp_bridge.js
+```
+
+---
 
 ### How it works
 
 ```
-You → WhatsApp → QR-authenticated bridge (Node.js, :3001) → Zero agent → reply → WhatsApp → You
+You ──→ WhatsApp ──→ whatsapp_bridge.js ──→ Zero API (:18790) ──→ LLM ──→ reply
+                     (whatsapp-web.js)       /v1/chat/completions        ↓
+You ←── WhatsApp ←─────────────────────────────────────────────────── reply
 ```
 
-- The Baileys library implements the WhatsApp Web protocol directly — no unofficial APIs, no bots
-- Session is encrypted and stored locally in `~/.zero/whatsapp-auth/`
-- Reconnects automatically if the connection drops
+- Session saved in `.ww_session/` (Puppeteer LocalAuth) — no re-scan needed after first time
+- Per-user conversation history maintained in memory (last 20 messages)
+- Voice notes are downloaded to `~/.zero/whatsapp_media/` and referenced in the message
+- Typing indicator shown while Zero is thinking
 
 ---
+
+### Troubleshooting
+
+**QR code not appearing** — Delete `.ww_session/` and re-run `node whatsapp_bridge.js`.
+
+**`Cannot find module 'whatsapp-web.js'`** — Run `npm install` first.
+
+**Puppeteer/Chromium error on Termux** — Install Chromium: `pkg install chromium` then:
+```bash
+PUPPETEER_SKIP_DOWNLOAD=true npm install
+```
+
+**`Zero is not responding`** — Make sure Zero API server is running: `python -m zero serve --port 18790`
+
+---
+
 
 ## 📱 Termux Auto-Start on Phone Boot
 
