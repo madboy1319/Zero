@@ -58,13 +58,7 @@ class DreamConfig(Base):
         return f"every {hours}h"
 
 
-class GoogleConfig(Base):
-    """Google API configuration."""
 
-    client_id: str = ""
-    client_secret: str = ""
-    redirect_uri: str = "urn:ietf:wg:oauth:2.0:oob"
-    token_path: str = "~/.zero/token.json"
 
 
 class AgentDefaults(Base):
@@ -216,7 +210,7 @@ class Config(BaseSettings):
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
-    google: GoogleConfig = Field(default_factory=GoogleConfig)
+
     api: ApiConfig = Field(default_factory=ApiConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)

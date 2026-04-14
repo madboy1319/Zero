@@ -27,24 +27,7 @@ from zero.agent.tools.search import GlobTool, GrepTool
 from zero.agent.tools.shell import ExecTool
 from zero.agent.tools.spawn import SpawnTool
 from zero.agent.tools.web import WebFetchTool, WebSearchTool
-from zero.agent.tools.google_calendar import (
-    GoogleCalendarListEventsTool,
-    GoogleCalendarCreateEventTool,
-    GoogleCalendarUpdateEventTool,
-    GoogleCalendarDeleteEventTool,
-)
-from zero.agent.tools.gmail import (
-    GmailListMessagesTool,
-    GmailReadMessageTool,
-    GmailSendMessageTool,
-    GmailDraftMessageTool,
-)
-from zero.agent.tools.google_tasks import (
-    GoogleTasksListTool,
-    GoogleTasksCreateTool,
-    GoogleTasksCompleteTool,
-    GoogleTasksDeleteTool,
-)
+
 from zero.bus.events import InboundMessage, OutboundMessage
 from zero.command import CommandContext, CommandRouter, register_builtin_commands
 from zero.bus.queue import MessageBus
@@ -308,21 +291,7 @@ class AgentLoop:
                 CronTool(self.cron_service, default_timezone=self.context.timezone or "UTC")
             )
         
-        # Register Google tools if configured
-        config = load_config()
-        if config.google.client_id and config.google.client_secret:
-            self.tools.register(GoogleCalendarListEventsTool())
-            self.tools.register(GoogleCalendarCreateEventTool())
-            self.tools.register(GoogleCalendarUpdateEventTool())
-            self.tools.register(GoogleCalendarDeleteEventTool())
-            self.tools.register(GmailListMessagesTool())
-            self.tools.register(GmailReadMessageTool())
-            self.tools.register(GmailSendMessageTool())
-            self.tools.register(GmailDraftMessageTool())
-            self.tools.register(GoogleTasksListTool())
-            self.tools.register(GoogleTasksCreateTool())
-            self.tools.register(GoogleTasksCompleteTool())
-            self.tools.register(GoogleTasksDeleteTool())
+
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -353,21 +322,7 @@ class AgentLoop:
                 if hasattr(tool, "set_context"):
                     tool.set_context(channel, chat_id, *([message_id] if name == "message" else []))
 
-        # Setup notification callback for Google tools
-        async def _notify_google(msg: str) -> None:
-            from zero.bus.events import OutboundMessage
-            await self.bus.publish_outbound(OutboundMessage(
-                channel=channel,
-                chat_id=chat_id,
-                content=msg,
-                metadata={"message_id": message_id} if message_id else {}
-            ))
 
-        for name in self.tools.tool_names:
-            if name.startswith(("google_", "gmail_")):
-                if tool := self.tools.get(name):
-                    if hasattr(tool, "set_notify_callback"):
-                        tool.set_notify_callback(_notify_google)
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
