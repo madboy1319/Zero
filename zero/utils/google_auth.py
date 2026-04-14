@@ -25,7 +25,7 @@ class GoogleAuthManager:
     def __init__(self, token_path: str | None = None):
         config = load_config()
         self.google_config = config.google
-        self.token_path = token_path or self.google_config.token_path
+        self.token_path = os.path.expanduser(token_path or self.google_config.token_path)
         self._creds: Credentials | None = None
         self._notify_callback: Callable[[str], Awaitable[None]] | None = None
 
