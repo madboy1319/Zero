@@ -1,131 +1,16 @@
-import os
-import json
-import asyncio
-from pathlib import Path
-from typing import Any, Awaitable, Callable
-
-from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build, Resource
-from loguru import logger
+from googleapiclient.discovery import build
+import os
 
-from zero.config.loader import load_config
+def get_credentials():
+    token_path = os.path.expanduser("~/.zero/token.json")
+    return Credentials.from_authorized_user_file(token_path)
 
-# If modifying these scopes, delete the file token.json.
-SCOPES = [
-    "https://www.googleapis.com/auth/calendar",
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/tasks",
-]
+def get_calendar_service():
+    return build("calendar", "v3", credentials=get_credentials())
 
-class GoogleAuthManager:
-    """Manages Google OAuth 2.0 authentication and service instantiation."""
+def get_gmail_service():
+    return build("gmail", "v1", credentials=get_credentials())
 
-    def __init__(self, token_path: str | None = None):
-        config = load_config()
-        self.google_config = config.google
-        self.token_path = os.path.expanduser(token_path or self.google_config.token_path)
-        self._creds: Credentials | None = None
-        self._notify_callback: Callable[[str], Awaitable[None]] | None = None
-
-    def set_notify_callback(self, callback: Callable[[str], Awaitable[None]] | None):
-        """Set a callback to notify the user (e.g., via Telegram)."""
-        self._notify_callback = callback
-
-    async def _get_credentials(self) -> Credentials:
-        """Gets valid user credentials from storage or performs OAuth flow."""
-        creds = None
-        # The file token.json stores the user's access and refresh tokens.
-        if os.path.exists(self.token_path):
-            creds = Credentials.from_authorized_user_file(self.token_path, SCOPES)
-
-        # If there are no (valid) credentials available, let the user log in.
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                logger.info("Refreshing Google OAuth token...")
-                try:
-                    await asyncio.to_thread(creds.refresh, Request())
-                except Exception as e:
-                    logger.error(f"Failed to refresh Google token: {e}")
-                    creds = await self._run_flow()
-            else:
-                creds = await self._run_flow()
-
-            # Save the credentials for the next run
-            with open(self.token_path, "w") as token:
-                token.write(creds.to_json())
-
-        self._creds = creds
-        return creds
-
-    async def _run_flow(self) -> Credentials:
-        """Runs the manual OAuth flow."""
-        print("\n" + "="*60)
-        print("GOOGLE AUTHENTICATION REQUIRED")
-        print("="*60)
-        
-        if self._notify_callback:
-            await self._notify_callback(
-                "Please check your terminal and open the authorization link to connect your Google account."
-            )
-
-        if not self.google_config.client_id or not self.google_config.client_secret:
-            raise ValueError(
-                "Google Client ID or Secret is missing in configuration. "
-                "Please check your .env file."
-            )
-
-        client_config = {
-            "installed": {
-                "client_id": self.google_config.client_id,
-                "client_secret": self.google_config.client_secret,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": [self.google_config.redirect_uri],
-            }
-        }
-
-        flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
-        auth_url, _ = flow.authorization_url(prompt='consent')
-        
-        print(f"\nAuthorization URL:\n{auth_url}\n")
-        print("="*60 + "\n")
-
-        # Run the manual code entry flow for OOB redirects
-        try:
-            print("\n" + "="*60)
-            print("PASTE THE CODE FROM YOUR BROWSER BELOW")
-            print("="*60)
-            
-            code = await asyncio.to_thread(input, "Paste the code shown in your browser: ")
-            await asyncio.to_thread(flow.fetch_token, code=code)
-            creds = flow.credentials
-        except Exception as e:
-            logger.error(f"OAuth flow failed: {e}")
-            raise
-        
-        if self._notify_callback:
-            await self._notify_callback(
-                "Google account connected successfully! Try your command again."
-            )
-        
-        return creds
-
-    async def get_service(self, service_name: str, version: str) -> Resource:
-        """Returns an authenticated Google API service object."""
-        creds = await self._get_credentials()
-        return await asyncio.to_thread(build, service_name, version, credentials=creds)
-
-# Singleton instance for easy access
-auth_manager = GoogleAuthManager()
-
-async def get_calendar_service() -> Resource:
-    return await auth_manager.get_service("calendar", "v3")
-
-async def get_gmail_service() -> Resource:
-    return await auth_manager.get_service("gmail", "v1")
-
-async def get_tasks_service() -> Resource:
-    # Note: Using v1 as it is the stable release for Google Tasks API.
-    return await auth_manager.get_service("tasks", "v1")
+def get_tasks_service():
+    return build("tasks", "v3", credentials=get_credentials())
