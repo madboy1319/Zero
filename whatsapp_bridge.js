@@ -55,12 +55,14 @@ function checkAndFireReminders(sock) {
         if (isNaN(due.getTime())) continue;
 
         if (due <= now) {
+            // Use the stored chat_id from when the reminder was set; fall back to last seen JID
+            const targetJid = r.chat_id || currentUserJid;
             const msg = r.note
                 ? `🔔 *Reminder:* ${r.title}\n📝 ${r.note}`
                 : `🔔 *Reminder:* ${r.title}`;
 
-            sock.sendMessage(currentUserJid, { text: msg })
-                .then(() => console.log(`[Reminder] Fired → ${currentUserJid}: ${r.title}`))
+            sock.sendMessage(targetJid, { text: msg })
+                .then(() => console.log(`[Reminder] Fired → ${targetJid}: ${r.title}`))
                 .catch(e => console.error(`[Reminder] Send failed: ${e.message}`));
 
             r.fired = true;
@@ -135,7 +137,12 @@ async function startBridge() {
                 {
                     model: 'openrouter/free',
                     messages: [{ role: 'user', content: text }],
-                    max_tokens: 1024
+                    max_tokens: 1024,
+                    // Pass the real WhatsApp JID as channel+chat_id so cron
+                    // jobs and reminders store the correct delivery destination
+                    channel: 'whatsapp',
+                    chat_id: from,
+                    session_id: from,
                 },
                 { timeout: 30000 }
             );

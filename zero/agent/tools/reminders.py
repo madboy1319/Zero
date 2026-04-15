@@ -20,7 +20,16 @@ from zero.agent.tools.schema import StringSchema, BooleanSchema, tool_parameters
     )
 )
 class ReminderSetTool(Tool):
-    """Save a reminder to ~/.zero/reminders.json and also create a cron job to deliver it at the due time."""
+    """Save a reminder to ~/.zero/reminders.json."""
+
+    def __init__(self) -> None:
+        self._channel: str = ""
+        self._chat_id: str = ""
+
+    def set_context(self, channel: str, chat_id: str) -> None:
+        """Capture the channel and chat_id of the requesting session."""
+        self._channel = channel
+        self._chat_id = chat_id
 
     @property
     def name(self) -> str:
@@ -37,7 +46,13 @@ class ReminderSetTool(Tool):
 
     async def execute(self, title: str, due_iso: str, note: str = "", **kwargs: Any) -> str:
         from zero.utils.reminders import add_reminder
-        reminder = add_reminder(title=title, due_iso=due_iso, note=note)
+        reminder = add_reminder(
+            title=title,
+            due_iso=due_iso,
+            note=note,
+            channel=self._channel,
+            chat_id=self._chat_id,
+        )
         details = f" ({note})" if note else ""
         return (
             f"✅ Reminder saved (id: {reminder['id']}): '{title}'{details} — due at {due_iso}.\n"

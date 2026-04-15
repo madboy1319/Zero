@@ -32,7 +32,7 @@ def _save(reminders: list[dict[str, Any]]) -> None:
         logger.error("Failed to save reminders.json: {}", e)
 
 
-def add_reminder(title: str, due_iso: str, note: str = "") -> dict[str, Any]:
+def add_reminder(title: str, due_iso: str, note: str = "", channel: str = "", chat_id: str = "") -> dict[str, Any]:
     """Add a reminder and return it."""
     reminders = _load()
     reminder = {
@@ -43,9 +43,14 @@ def add_reminder(title: str, due_iso: str, note: str = "") -> dict[str, Any]:
         "done": False,
         "created_at": datetime.now().isoformat(),
     }
+    # Store delivery destination so the bridge knows where to send the notification
+    if channel:
+        reminder["channel"] = channel
+    if chat_id:
+        reminder["chat_id"] = chat_id
     reminders.append(reminder)
     _save(reminders)
-    logger.info("Reminder added: '{}' due {}", title, due_iso)
+    logger.info("Reminder added: '{}' due {} → {}:{}", title, due_iso, channel, chat_id)
     return reminder
 
 

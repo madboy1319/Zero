@@ -7,6 +7,7 @@ All requests route to a single persistent API session.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 import uuid
 from typing import Any
@@ -57,6 +58,37 @@ def _response_text(value: Any) -> str:
     return str(value)
 
 
+# Matches standalone tool-call lines: identifier( ... )
+_TOOL_CALL_LINE = re.compile(
+    r'^\s*[a-z_][a-z0-9_]*\s*\([^)]*\)\s*$',
+    re.MULTILINE,
+)
+_CODE_BLOCK = re.compile(r'```[\s\S]*?```')
+
+
+def _strip_tool_calls(text: str) -> str:
+    """Remove tool-call syntax that leaked into the final response text.
+
+    Some models that don't support native function-calling output raw
+    calls like ``reminder_set("hello")`` as plain text.  Strip those
+    lines so users only ever see natural-language replies.
+    """
+    if not text:
+        return text
+    # Drop lines that are purely a function call
+    cleaned = _TOOL_CALL_LINE.sub('', text)
+    # Drop fenced code-blocks that consist only of tool-call lines
+    def _drop_tool_block(m: re.Match) -> str:
+        inner = m.group(0)
+        # Keep code blocks that have genuine code (not just one tool-call)
+        inner_lines = [l for l in inner.splitlines() if l.strip() and not l.strip().startswith('```')]
+        if all(_TOOL_CALL_LINE.match(l) for l in inner_lines if l.strip()):
+            return ''
+        return m.group(0)
+    cleaned = _CODE_BLOCK.sub(_drop_tool_block, cleaned)
+    return cleaned.strip()
+
+
 # ---------------------------------------------------------------------------
 # Route handlers
 # ---------------------------------------------------------------------------
@@ -94,11 +126,18 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
     if (requested_model := body.get("model")) and requested_model != model_name:
         return _error_json(400, f"Only configured model '{model_name}' is available")
 
-    session_key = f"api:{body['session_id']}" if body.get("session_id") else API_SESSION_KEY
+    # Allow the caller (e.g. whatsapp_bridge.js) to pass its own channel/chat_id
+    # so that cron jobs and reminders store the correct delivery destination.
+    req_channel: str = body.get("channel") or "api"
+    req_chat_id: str = body.get("chat_id") or body.get("session_id") or API_CHAT_ID
+
+    session_key = f"{req_channel}:{req_chat_id}" if (req_channel != "api" or req_chat_id != API_CHAT_ID) else API_SESSION_KEY
+    if body.get("session_id") and req_channel == "api":
+        session_key = f"api:{body['session_id']}"
     session_locks: dict[str, asyncio.Lock] = request.app["session_locks"]
     session_lock = session_locks.setdefault(session_key, asyncio.Lock())
 
-    logger.info("API request session_key={} content={}", session_key, user_content[:80])
+    logger.info("API request session_key={} channel={} content={}", session_key, req_channel, user_content[:80])
 
     _FALLBACK = EMPTY_FINAL_RESPONSE_MESSAGE
 
@@ -109,12 +148,12 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
                     agent_loop.process_direct(
                         content=user_content,
                         session_key=session_key,
-                        channel="api",
-                        chat_id=API_CHAT_ID,
+                        channel=req_channel,
+                        chat_id=req_chat_id,
                     ),
                     timeout=timeout_s,
                 )
-                response_text = _response_text(response)
+                response_text = _strip_tool_calls(_response_text(response))
 
                 if not response_text or not response_text.strip():
                     logger.warning(
@@ -125,12 +164,12 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
                         agent_loop.process_direct(
                             content=user_content,
                             session_key=session_key,
-                            channel="api",
-                            chat_id=API_CHAT_ID,
+                            channel=req_channel,
+                            chat_id=req_chat_id,
                         ),
                         timeout=timeout_s,
                     )
-                    response_text = _response_text(retry_response)
+                    response_text = _strip_tool_calls(_response_text(retry_response))
                     if not response_text or not response_text.strip():
                         logger.warning(
                             "Empty response after retry for session {}, using fallback",
