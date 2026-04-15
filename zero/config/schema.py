@@ -3,11 +3,42 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
 from zero.cron.types import CronSchedule
+
+
+def _default_timezone() -> str:
+    """Detect system IANA timezone; fall back to Asia/Kolkata."""
+    try:
+        tz_file = Path("/etc/timezone")
+        if tz_file.exists():
+            tz = tz_file.read_text(encoding="utf-8").strip()
+            if "/" in tz:
+                return tz
+    except Exception:
+        pass
+    try:
+        import time
+        offset_hours = -(time.timezone if not time.daylight else time.altzone) / 3600
+        # Map known offsets to IANA names — expand as needed
+        _OFFSET_MAP = {
+            5.5: "Asia/Kolkata",
+            5.75: "Asia/Kathmandu",
+            6.0: "Asia/Dhaka",
+            8.0: "Asia/Shanghai",
+            9.0: "Asia/Tokyo",
+            -5.0: "America/New_York",
+            -8.0: "America/Los_Angeles",
+            0.0: "Europe/London",
+            1.0: "Europe/Paris",
+        }
+        return _OFFSET_MAP.get(offset_hours, "Asia/Kolkata")
+    except Exception:
+        pass
+    return "Asia/Kolkata"
 
 
 class Base(BaseModel):
@@ -77,7 +108,7 @@ class AgentDefaults(Base):
     max_tool_result_chars: int = 16_000
     provider_retry_mode: Literal["standard", "persistent"] = "standard"
     reasoning_effort: str | None = None  # low / medium / high - enables LLM thinking mode
-    timezone: str = "UTC"  # IANA timezone, e.g. "Asia/Shanghai", "America/New_York"
+    timezone: str = Field(default_factory=_default_timezone)  # IANA timezone e.g. "Asia/Kolkata"
     dream: DreamConfig = Field(default_factory=DreamConfig)
 
 
