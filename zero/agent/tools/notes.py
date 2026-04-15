@@ -28,9 +28,9 @@ class NoteSaveTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Save a note for the user. Trigger this when the user says things like "
-            "'note this down', 'save this', 'remember this', 'jot this down', 'keep a note of...'. "
-            "Always confirm what was saved."
+            "Save a strictly personal note, idea, or information the user explicitly asks to 'remember' or 'save'. "
+            "Do NOT use this for answering factual questions, weather, or news — use web_search for those instead. "
+            "Trigger on 'note this', 'save this', 'remember this'. Always confirm what was saved."
         )
 
     async def execute(self, content: str, tags: list[str] | None = None, **kwargs: Any) -> str:

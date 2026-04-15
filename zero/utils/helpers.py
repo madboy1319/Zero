@@ -59,7 +59,7 @@ def timestamp() -> str:
 
 
 def current_time_str(timezone: str | None = None) -> str:
-    """Return the current time string without raw UTC offsets."""
+    """Return a clean current time string without any UTC offsets."""
     from zoneinfo import ZoneInfo
 
     try:
@@ -67,9 +67,11 @@ def current_time_str(timezone: str | None = None) -> str:
     except (KeyError, Exception):
         tz = None
 
+    # Get time in requested TZ or local
     now = datetime.now(tz=tz) if tz else datetime.now().astimezone()
-    tz_name = timezone or time.strftime("%Z") or "local"
-    return f"{now.strftime('%Y-%m-%d %H:%M (%A)')} {tz_name}"
+    
+    # Format: 2026-04-15 17:40 (Wednesday)
+    return now.strftime('%Y-%m-%d %H:%M (%A)')
 
 
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*]')

@@ -1,5 +1,9 @@
-const { default: makeWASocket, useMultiFileAuthState, 
-DisconnectReason } = require('@whiskeysockets/baileys');
+const { 
+    default: makeWASocket, 
+    useMultiFileAuthState, 
+    DisconnectReason,
+    downloadMediaMessage 
+} = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const axios = require('axios');
 const path = require('path');
@@ -10,29 +14,68 @@ const API_URL = 'http://localhost:18790/v1/chat/completions';
 const SESSION_DIR = path.join(__dirname, '.baileys_session');
 const REMINDERS_FILE = path.join(os.homedir(), '.zero', 'reminders.json');
 
+// Get Groq key from env
+const GROQ_API_KEY = process.env.ZERO_PROVIDERS__GROQ__API_KEY || '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';
+
 // --- Track last sender JID so reminders know where to send ---
 let currentUserJid = null;
 
-// --- Fix #1: Strip raw tool call syntax from model responses ---
+// --- Bug 1: Robust Tool Call Stripping ---
 function cleanResponse(text) {
     if (!text) return text;
-    // Remove lines that are purely a function call like: reminder_set("...", ...)
-    const lines = text.split('\n').filter(line => {
-        const trimmed = line.trim();
-        // A "tool call line" looks like: identifier( anything )
-        if (/^[a-z_]{2,}\([\s\S]*\)\s*$/.test(trimmed)) return false;
-        // Also strip JSON-like tool call blocks
-        if (/^"(name|function|arguments)"\s*:/.test(trimmed)) return false;
-        return true;
+    
+    // Matches standalone tool-call lines (with optional bullets)
+    const toolLineRegex = /^\s*([-*]|\d+\.)?\s*[a-z_][a-z0-9_]*\s*\([^)]*\)\s*$/im;
+    
+    // 1. Filter out tool-call lines
+    const lines = text.split('\n').filter(line => !toolLineRegex.test(line));
+    let cleaned = lines.join('\n').trim();
+    
+    // 2. Drop code blocks that ONLY contain tool calls
+    cleaned = cleaned.replace(/```[\s\S]*?```/g, (match) => {
+        const inner = match.replace(/```/g, '').trim();
+        if (!inner) return '';
+        const innerLines = inner.split('\n').filter(l => l.trim().length > 0);
+        if (innerLines.every(l => toolLineRegex.test(l))) return '';
+        return match;
     });
-    // Remove common prefixes the model sometimes adds before calling tools
-    let result = lines.join('\n').trim();
-    // Remove trailing code blocks that look like tool calls
-    result = result.replace(/```[\s\S]*?```/g, '').trim();
-    return result || text;
+    
+    // 3. Remove inline tool calls that might have leaked
+    cleaned = cleaned.replace(/[a-z_][a-z0-9_]*\s*\([^)]*\)/gi, '');
+    
+    return cleaned.trim();
 }
 
-// --- Fix #2: Reminder checker — polls reminders.json every 60s ---
+// --- Bug 5: Voice Message Transcription ---
+async function transcribeAudio(msg) {
+    try {
+        console.log('🎤 Downloading voice note...');
+        const buffer = await downloadMediaMessage(msg, 'buffer', {});
+        
+        // Prepare multipart form data for Groq
+        const FormData = require('form-data');
+        const form = new FormData();
+        form.append('file', buffer, { filename: 'voice.ogg', contentType: 'audio/ogg' });
+        form.append('model', 'whisper-large-v3-turbo');
+
+        console.log('☁️ Transcribing via Groq Whisper...');
+        const response = await axios.post('https://api.groq.com/openai/v1/audio/transcriptions', form, {
+            headers: {
+                ...form.getHeaders(),
+                'Authorization': `Bearer ${GROQ_API_KEY}`
+            }
+        });
+
+        const text = response.data.text;
+        console.log('📝 Transcription:', text);
+        return text;
+    } catch (err) {
+        console.error('❌ Transcription failed:', err.response?.data || err.message);
+        return null;
+    }
+}
+
+// --- Fix #2: Reminder checker ---
 function checkAndFireReminders(sock) {
     if (!currentUserJid) return;
     if (!fs.existsSync(REMINDERS_FILE)) return;
@@ -55,7 +98,6 @@ function checkAndFireReminders(sock) {
         if (isNaN(due.getTime())) continue;
 
         if (due <= now) {
-            // Use the stored chat_id from when the reminder was set; fall back to last seen JID
             const targetJid = r.chat_id || currentUserJid;
             const msg = r.note
                 ? `🔔 *Reminder:* ${r.title}\n📝 ${r.note}`
@@ -83,8 +125,10 @@ function checkAndFireReminders(sock) {
 async function startBridge() {
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
     
+    // Baileys socket
     const sock = makeWASocket({
-        auth: state
+        auth: state,
+        printQRInTerminal: false // We handle it manually in connection.update
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -104,9 +148,8 @@ async function startBridge() {
         }
         if (connection === 'open') {
             console.log('✅ WhatsApp connected!');
-            // Start reminder polling once connected
             setInterval(() => checkAndFireReminders(sock), 60 * 1000);
-            console.log('🔔 Reminder checker started (polling every 60s)');
+            console.log('🔔 Reminder checker started (60s interval)');
         }
     });
 
@@ -119,46 +162,59 @@ async function startBridge() {
         const from = msg.key.remoteJid;
         if (!from) return;
 
-        // Track who we're talking to so reminders go to the right JID
         currentUserJid = from;
         
-        const text = msg.message?.conversation 
-            || msg.message?.extendedTextMessage?.text 
-            || msg.message?.imageMessage?.caption
-            || '';
+        let userText = '';
+
+        // Handle text message
+        if (msg.message.conversation || msg.message.extendedTextMessage) {
+            userText = msg.message.conversation || msg.message.extendedTextMessage.text;
+        } 
+        // Handle image caption
+        else if (msg.message.imageMessage) {
+            userText = msg.message.imageMessage.caption || '';
+        }
+        // Handle voice note (Bug 5)
+        else if (msg.message.audioMessage) {
+            userText = await transcribeAudio(msg);
+            if (!userText) {
+                await sock.sendMessage(from, { text: "⚠️ Failed to transcribe voice message." });
+                return;
+            }
+        }
         
-        if (!text.trim()) return;
+        if (!userText || !userText.trim()) return;
         
-        console.log('Message from:', from, '→', text);
+        console.log('Message from:', from, '→', userText);
         
         try {
             const response = await axios.post(
-                'http://localhost:18790/v1/chat/completions', 
+                API_URL, 
                 {
                     model: 'openrouter/free',
-                    messages: [{ role: 'user', content: text }],
+                    messages: [{ role: 'user', content: userText }],
                     max_tokens: 1024,
-                    // Pass the real WhatsApp JID as channel+chat_id so cron
-                    // jobs and reminders store the correct delivery destination
                     channel: 'whatsapp',
                     chat_id: from,
-                    session_id: from,
+                    session_id: from
                 },
-                { timeout: 30000 }
+                { timeout: 45000 }
             );
-            // Fix #1: clean any leaked tool call syntax before sending
+
             const raw = response.data.choices[0].message.content;
             const reply = cleanResponse(raw);
+            
             if (!reply || !reply.trim()) return;
+
             await sock.sendMessage(from, { text: reply });
             console.log('Replied:', reply.substring(0, 50) + '...');
         } catch (err) {
             console.error('Error:', err.message);
             await sock.sendMessage(from, { 
-                text: "Having trouble connecting. Try again in a moment." 
+                text: "My brain is a bit slow right now. Can you try again?" 
             });
         }
     });
 }
 
-startBridge();
+startBridge().catch(err => console.error('Startup Error:', err));

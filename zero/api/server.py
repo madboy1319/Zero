@@ -59,34 +59,44 @@ def _response_text(value: Any) -> str:
 
 
 # Matches standalone tool-call lines: identifier( ... )
+# Supports optional bullets like '- note_save(...)' or '1. web_search(...)'
 _TOOL_CALL_LINE = re.compile(
-    r'^\s*[a-z_][a-z0-9_]*\s*\([^)]*\)\s*$',
-    re.MULTILINE,
+    r'^\s*([-*]|\d+\.)?\s*[a-z_][a-z0-9_]*\s*\([^)]*\)\s*$',
+    re.MULTILINE | re.IGNORECASE,
+)
+# Matches inline tool calls like 'note_save("...")' that might be at the end of a sentence
+_INLINE_TOOL_CALL = re.compile(
+    r'[a-z_][a-z0-9_]*\s*\([^)]*\)',
+    re.IGNORECASE,
 )
 _CODE_BLOCK = re.compile(r'```[\s\S]*?```')
 
 
 def _strip_tool_calls(text: str) -> str:
-    """Remove tool-call syntax that leaked into the final response text.
-
-    Some models that don't support native function-calling output raw
-    calls like ``reminder_set("hello")`` as plain text.  Strip those
-    lines so users only ever see natural-language replies.
-    """
+    """Remove tool-call syntax that leaked into the final response text."""
     if not text:
         return text
-    # Drop lines that are purely a function call
-    cleaned = _TOOL_CALL_LINE.sub('', text)
-    # Drop fenced code-blocks that consist only of tool-call lines
+    
+    # 1. Drop standalone lines that are purely a tool call
+    text = _TOOL_CALL_LINE.sub('', text)
+    
+    # 2. Drop fenced code-blocks that consist ONLY of tool-call lines
     def _drop_tool_block(m: re.Match) -> str:
         inner = m.group(0)
-        # Keep code blocks that have genuine code (not just one tool-call)
+        # Extract lines excluding the fences
         inner_lines = [l for l in inner.splitlines() if l.strip() and not l.strip().startswith('```')]
-        if all(_TOOL_CALL_LINE.match(l) for l in inner_lines if l.strip()):
+        if not inner_lines:
+            return ''
+        # If all lines look like tool calls, drop the whole block
+        if all(_TOOL_CALL_LINE.match(l) for l in inner_lines):
             return ''
         return m.group(0)
-    cleaned = _CODE_BLOCK.sub(_drop_tool_block, cleaned)
-    return cleaned.strip()
+    text = _CODE_BLOCK.sub(_drop_tool_block, text)
+    
+    # 3. Last resort: strip any remaining identifier(...) strings
+    text = _INLINE_TOOL_CALL.sub('', text)
+    
+    return text.strip()
 
 
 # ---------------------------------------------------------------------------

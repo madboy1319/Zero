@@ -309,6 +309,10 @@ class AgentLoop:
 
         tz = self.context.timezone or "UTC"
 
+        profile = self.profile.load()
+        primary_channel = profile.get("primary_channel") or "cli"
+        primary_chat_id = profile.get("primary_chat_id") or "direct"
+
         # Evening check-in — 9 PM every day
         evening_job = CronJob(
             id="system_evening_checkin",
@@ -323,6 +327,8 @@ class AgentLoop:
                     "When they reply, save their plan using note_save with tags=['tomorrow_plan']."
                 ),
                 deliver=True,
+                channel=primary_channel,
+                to=primary_chat_id,
             ),
         )
         self.cron_service.register_system_job(evening_job)
@@ -349,6 +355,8 @@ class AgentLoop:
                     "Then send a warm, conversational summary — not a boring list. Start with a friendly greeting."
                 ),
                 deliver=True,
+                channel=primary_channel,
+                to=primary_chat_id,
             ),
         )
         self.cron_service.register_system_job(morning_job)
@@ -685,6 +693,17 @@ class AgentLoop:
             self._schedule_background(self._sync_user_profile_background(all_msgs))
             
         self._increment_message_count(session)
+
+        # Bug 3 & 6: Capture routing info to profile so system jobs can reach the user
+        if msg.channel not in ("cli", "system") and msg.chat_id:
+            profile = self.profile.load()
+            if profile.get("primary_channel") != msg.channel or profile.get("primary_chat_id") != msg.chat_id:
+                self.profile.merge({
+                    "primary_channel": msg.channel,
+                    "primary_chat_id": msg.chat_id,
+                })
+                # Re-register system jobs with the new destination
+                self._register_system_cron_jobs()
 
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
             return None
